@@ -1,0 +1,6 @@
+{
+  "name": "DroidLink Protocol Spec",
+  "description": "Technical specification and byte-level protocol definition for low-latency Android remote control via ADB sockets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
