@@ -13,15 +13,18 @@ function createWindow () {
   });
 
   win.loadFile('index.html');
+  win.webContents.openDevTools();
 }
 
 app.whenReady().then(() => {
   // Setup adb forwarding
   console.log('Setting up adb port forwarding...');
-  exec('adb forward tcp:8080 tcp:8080', (error, stdout, stderr) => {
+  const adbPath = path.join(process.env.USERPROFILE, 'AppData', 'Local', 'Android', 'Sdk', 'platform-tools', 'adb.exe');
+  
+  exec(`"${adbPath}" forward tcp:8080 tcp:8080`, (error, stdout, stderr) => {
     if (error) console.error(`adb forward 8080 error: ${error.message}`);
   });
-  exec('adb forward tcp:8081 tcp:8081', (error, stdout, stderr) => {
+  exec(`"${adbPath}" forward tcp:8081 tcp:8081`, (error, stdout, stderr) => {
     if (error) console.error(`adb forward 8081 error: ${error.message}`);
   });
 
