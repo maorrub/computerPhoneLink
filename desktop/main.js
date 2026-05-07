@@ -13,7 +13,6 @@ function createWindow () {
   });
 
   win.loadFile('index.html');
-  win.webContents.openDevTools();
 }
 
 app.whenReady().then(() => {
@@ -26,6 +25,9 @@ app.whenReady().then(() => {
   });
   exec(`"${adbPath}" forward tcp:8081 tcp:8081`, (error, stdout, stderr) => {
     if (error) console.error(`adb forward 8081 error: ${error.message}`);
+  });
+  exec(`"${adbPath}" forward tcp:8082 tcp:8082`, (error, stdout, stderr) => {
+    if (error) console.error(`adb forward 8082 error: ${error.message}`);
   });
 
   createWindow();

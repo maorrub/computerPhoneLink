@@ -14,6 +14,10 @@ import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioPlaybackCaptureConfiguration;
+import android.media.AudioRecord;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -38,10 +42,13 @@ public class ScreenStreamerService extends Service {
     private MediaCodec videoCodec;
     
     private ServerSocket serverSocket;
+    private ServerSocket audioServerSocket;
+    private AudioRecord audioRecord;
     private boolean isStreaming = false;
 
     private byte[] spsPpsCache = null;
     private CopyOnWriteArrayList<OutputStream> clients = new CopyOnWriteArrayList<>();
+    private CopyOnWriteArrayList<OutputStream> audioClients = new CopyOnWriteArrayList<>();
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -68,6 +75,8 @@ public class ScreenStreamerService extends Service {
                     try {
                         setupVideoCodec();
                         startServer();
+                        setupAudioCapture();
+                        startAudioServer();
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
@@ -87,9 +96,16 @@ public class ScreenStreamerService extends Service {
 
         MediaFormat format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-        format.setInteger(MediaFormat.KEY_BIT_RATE, 6000000);
+        // Lower bitrate from 6Mbps to 2Mbps for much faster transfer
+        format.setInteger(MediaFormat.KEY_BIT_RATE, 2000000);
         format.setInteger(MediaFormat.KEY_FRAME_RATE, 30);
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+        
+        // Force the encoder into low-latency mode (Android 11+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            format.setInteger(MediaFormat.KEY_LATENCY, 0);
+            format.setInteger(MediaFormat.KEY_PRIORITY, 0); // High priority
+        }
         
         format.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline);
         format.setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel31);
@@ -152,7 +168,9 @@ public class ScreenStreamerService extends Service {
     private void startServer() {
         new Thread(() -> {
             try {
-                serverSocket = new ServerSocket(PORT);
+                serverSocket = new ServerSocket();
+                serverSocket.setReuseAddress(true);
+                serverSocket.bind(new java.net.InetSocketAddress(PORT));
                 while (isStreaming) {
                     Socket clientSocket = serverSocket.accept();
                     handleClient(clientSocket);
@@ -183,6 +201,75 @@ public class ScreenStreamerService extends Service {
         }
     }
 
+    private void setupAudioCapture() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                AudioPlaybackCaptureConfiguration config = new AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
+                        .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                        .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                        .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                        .build();
+
+                AudioFormat audioFormat = new AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(44100)
+                        .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                        .build();
+
+                int bufferSize = AudioRecord.getMinBufferSize(44100, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+
+                audioRecord = new AudioRecord.Builder()
+                        .setAudioFormat(audioFormat)
+                        .setBufferSizeInBytes(bufferSize)
+                        .setAudioPlaybackCaptureConfig(config)
+                        .build();
+
+                audioRecord.startRecording();
+
+                new Thread(() -> {
+                    byte[] audioBuffer = new byte[bufferSize];
+                    try {
+                        while (isStreaming) {
+                            int read = audioRecord.read(audioBuffer, 0, audioBuffer.length);
+                            if (read > 0) {
+                                for (OutputStream out : audioClients) {
+                                    try {
+                                        out.write(audioBuffer, 0, read);
+                                        out.flush();
+                                    } catch (Exception e) {
+                                        audioClients.remove(out);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }).start();
+            } catch (SecurityException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void startAudioServer() {
+        new Thread(() -> {
+            try {
+                audioServerSocket = new ServerSocket();
+                audioServerSocket.setReuseAddress(true);
+                audioServerSocket.bind(new java.net.InetSocketAddress(8082));
+                while (isStreaming) {
+                    Socket clientSocket = audioServerSocket.accept();
+                    try {
+                        audioClients.add(clientSocket.getOutputStream());
+                    } catch (Exception e) {}
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
+    }
+
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Screen Streamer", NotificationManager.IMPORTANCE_DEFAULT);
@@ -202,9 +289,14 @@ public class ScreenStreamerService extends Service {
             videoCodec.release();
         }
         if (mediaProjection != null) mediaProjection.stop();
+        if (audioRecord != null) {
+            audioRecord.stop();
+            audioRecord.release();
+        }
         
         try {
             if (serverSocket != null) serverSocket.close();
+            if (audioServerSocket != null) audioServerSocket.close();
         } catch (Exception e) {}
         
         clients.clear();

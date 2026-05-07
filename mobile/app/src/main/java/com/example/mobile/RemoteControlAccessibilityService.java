@@ -27,7 +27,9 @@ public class RemoteControlAccessibilityService extends AccessibilityService {
         isListening = true;
         new Thread(() -> {
             try {
-                serverSocket = new ServerSocket(PORT);
+                serverSocket = new ServerSocket();
+                serverSocket.setReuseAddress(true);
+                serverSocket.bind(new java.net.InetSocketAddress(8081));
                 while (isListening) {
                     Socket clientSocket = serverSocket.accept();
                     handleClient(clientSocket);
@@ -51,6 +53,13 @@ public class RemoteControlAccessibilityService extends AccessibilityService {
                             int x = json.optInt("x");
                             int y = json.optInt("y");
                             performTap(x, y);
+                        } else if ("swipe".equals(action)) {
+                            int x1 = json.optInt("x1");
+                            int y1 = json.optInt("y1");
+                            int x2 = json.optInt("x2");
+                            int y2 = json.optInt("y2");
+                            int duration = json.optInt("duration", 300);
+                            performSwipe(x1, y1, x2, y2, duration);
                         }
                     } catch (Exception e) {
                         e.printStackTrace();
@@ -66,6 +75,16 @@ public class RemoteControlAccessibilityService extends AccessibilityService {
         Path clickPath = new Path();
         clickPath.moveTo(x, y);
         GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(clickPath, 0, 100);
+        GestureDescription.Builder builder = new GestureDescription.Builder();
+        builder.addStroke(stroke);
+        dispatchGesture(builder.build(), null, null);
+    }
+
+    private void performSwipe(int x1, int y1, int x2, int y2, int duration) {
+        Path swipePath = new Path();
+        swipePath.moveTo(x1, y1);
+        swipePath.lineTo(x2, y2);
+        GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(swipePath, 0, duration);
         GestureDescription.Builder builder = new GestureDescription.Builder();
         builder.addStroke(stroke);
         dispatchGesture(builder.build(), null, null);
